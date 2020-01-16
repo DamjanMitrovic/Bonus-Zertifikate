@@ -21,15 +21,13 @@ double Mean_and_discount(const double& Price_Sum, const int& Timesteps_left);
 
 double Evaluate_Certificate_Price(const double& S_value, const int& Timesteps_left, bool TochBarrier); 
 
-double Propagate_S(const double& S_value, bool& TouchBarrier); 
+double Propagate_S_until_end(const double& S_value, bool& TouchBarrier, double& S_1); 
 
 double Get_StdNormDistr_RandomNumber();
 
 template<std::size_t size>
-double Std_Dev(const std::array<double, size>& Arr, const double& Mean); 
+double Stat_Error_Mean(const std::array<double, size>& Arr, const double& Mean); 
 
-template<std::size_t size>
-double Ar_Mean(const std::array<double, size>& Arr);
 
 std::random_device rd{};     // Random seed from the computer; Syntax is equal to: std::random_device rd;
 //std::mt19937 gen{rd()};    // Method with which the random numbers are generated, Therefore, one needs to provide the seed at which to start (here rd or arbitrary number), Syntax equal to std::mt19937 gen = 2;
@@ -37,14 +35,12 @@ std::mt19937 gen{2};         // Method with which the random numbers are generat
 boost::math::normal dist(0.0,1.0); 
 
 //global constant variables
-const int S_0_Min_ = 50;
+const int S_0_Min_ = 40;
 const int S_0_Max_ = 140;
 const int S_0_Stepsize_ = 1;
-const int N_Paths_S_      = 100;              // Number of Paths for S
+const int N_Paths_S_      = 10000;              // Number of Paths for S
 const int N_Paths_ 	     = 1000;      	   		// Number of paths for MC evaluating the Certificate Price
-const int N_Evaluations_ = 250;            // Number of Value evaluations (rate of return timesteps)
-const int TS_per_eval_	= 1;              // Timesteps per evaluation
-const int N_Timesteps_    = N_Evaluations_ * TS_per_eval_; // Number of time steps that are calculated
+const int N_Timesteps_    = 250; // Number of time steps that are calculated
 const double Maturity_       = 1.0;    		// Maturity of the derivative in [a]
 const double Timestep_size_ = Maturity_ / N_Timesteps_; // time intervall for each evaluation
 //	const double S_0_;        // = 72.93;   // Initial value of the underlying // https://www.onvista.de/aktien/BASF-Aktie-DE000BASF111 - not needed as const
@@ -65,98 +61,84 @@ int main(int argc, char const *argv[])
 {
   double S_0;
   double S_old;
-  double S_new;
+	double S_new;
+	double S_1;
 
   double Z_0;
-  double Z_old;
+	double Z_1;
   double Z_new;
-  double Z_sum_new;
-
-  double Rendite;
-  double Mean_Renditen;
-	double Volatility;
-	double Sharp_Ratio;
-
-  int N_Timesteps_left;
 
 	bool TouchBarrier;
-
-	std::array<double, N_Evaluations_> Renditen;
-	
 	//only works on linux...creating output directories
-	if (system("mkdir Output") == -1) {
+	if (system("mkdir ES_VaR_Output") == -1) {
 		printf("Output Directories not created\n");
 		exit(1);
 	}
 
-    
-	std::ofstream volatility;
-	std::ofstream sharp_ratio;
-	volatility.open("Output/Volatility.csv");
-	sharp_ratio.open("Output/Sharp_Ratio.csv");
+	std::ofstream prices_end;
+	std::ofstream prices_1;
+  // First row containing S_0
+  // Second row containing Z_0
+  // Following rows containing prices at the end of the evolution with mu or prices after 1 timestep (day in our case)
+	prices_end.open("ES_VaR_Output/prices_end.csv");
+	prices_1.open("ES_VaR_Output/prices_1.csv");
 
-	for (int start_price = S_0_Min_; start_price <= S_0_Max_; start_price = start_price+S_0_Stepsize_){
-		volatility << start_price << ",";
-		sharp_ratio << start_price << ",";
+
+	//Write first row
+  for (int start_price = S_0_Min_; start_price <= S_0_Max_ ; start_price = start_price+S_0_Stepsize_){
+
+  	prices_end << start_price << ",";
+  	prices_1 << start_price << ",";
 	}
-	volatility << std::endl;
-	sharp_ratio << std::endl;
-
+	prices_end << std::endl;
+	prices_1 << std::endl;
+	//write second row
+	for (int start_price = S_0_Min_; start_price <= S_0_Max_ ; start_price = start_price+S_0_Stepsize_){
+		//std::cout << "S_0: " << start_price << std::endl;
+		S_0 = double(start_price);
+		//Set TouchBarrier = false upfront (before 1. calculation of the value)
+    //If starting underlying price is already hitting barrier set it to true
+    TouchBarrier = false;
+    if (start_price <= Barrier_){
+      TouchBarrier = true;
+    }
+    Z_0 = Evaluate_Certificate_Price(S_0, N_Timesteps_, TouchBarrier);
+		prices_end << Z_0 << ",";
+		prices_1 << Z_0 << ",";
+	} //End evaluation of Z_0;
+	prices_end << std::endl;
+	prices_1 << std::endl;
 	//Different paths for S-Propagation
 	for (int path_s = 1; path_s <= N_Paths_S_; path_s++){
-  	std::cout << "Path_S: " << path_s << std::endl;
-	
-	  for (int start_price = S_0_Min_; start_price <= S_0_Max_; start_price = start_price+S_0_Stepsize_){
-			std::cout << "S_0: " << start_price << std::endl;
+	std::cout << "Path: " << path_s << std::endl;
+		for (int start_price = S_0_Min_; start_price <= S_0_Max_ ; start_price = start_price+S_0_Stepsize_){ 
+		//std::cout << "S_0: " << start_price << std::endl;
 			S_0 = double(start_price);
-
-			//Set TouchBarrier = false upfront (before 1. calculation of the value) 
-			//If starting underlying price is already hitting barrier set it to true
-	  	TouchBarrier = false;
+			//initialize bool
+			TouchBarrier = false;
 			if (start_price <= Barrier_){
 				TouchBarrier = true;
 			}
-
-	    Z_0 = Evaluate_Certificate_Price(S_0, N_Timesteps_, TouchBarrier);
-
-	    S_old = S_0;
-	    Z_old = Z_0;
-
-
-			for (int ts = 1; ts <= N_Evaluations_; ts++){
-
-	    	S_new  = Propagate_S(S_old, TouchBarrier);
-				N_Timesteps_left = N_Timesteps_ - ts * TS_per_eval_;
-       
-	      Z_new = Evaluate_Certificate_Price(S_new, N_Timesteps_left, TouchBarrier);
-        
-	      //Log returns on daily basis...can be modified by using less timesteps
-	      Rendite = log(Z_new / Z_old);
-				//Fill array with log returns (steady_rendity)
-				Renditen[ts-1] = Rendite;
-
-	      //Preparing for next Timestep
-				Z_old = Z_new;
-	      S_old = S_new;
-
-			} // ending loop over evaluation timesteps
-			//Calculate Mean of Rate of Return
-			Mean_Renditen = Ar_Mean(Renditen);
-			//Annualization of the volatiliy by multiplying by the square-root of days
-			Volatility = sqrt(N_Evaluations_) * Std_Dev(Renditen, Mean_Renditen);
-			//Annualisieren of the rate of return by multiplying by days (Evaluation_Points)
-			Mean_Renditen = N_Evaluations_ * Mean_Renditen;
-			//Sharp_Ratio
-			Sharp_Ratio = Mean_Renditen / Volatility;
-			//Output to files
-			volatility << Volatility << ",";
-			sharp_ratio << Sharp_Ratio << ",";
-		} // endling loop over outer paths
-		volatility << std::endl;
-		sharp_ratio << std::endl;
-	} // ending loop over starting price
-	volatility.close();
-	sharp_ratio.close();
+			//Propagate until the end of the evolution
+			//S1 is assigned in this function
+	    S_new  = Propagate_S_until_end(S_0, TouchBarrier, S_1);
+			// Calculate Price at the end of evolution
+			Z_1 = Evaluate_Certificate_Price(S_1, N_Timesteps_-1, TouchBarrier);
+			// Calculate Price at the end of evolution
+      if (TouchBarrier || (S_new > Bonus_level_)) {
+				Z_new = S_new;
+      } else {
+      	Z_new = Bonus_level_;
+			}
+			//Output of the price
+			prices_end << Z_new << ",";
+			prices_1 << Z_1 << ",";
+		} // ending loop over starting price
+		prices_end << std::endl;
+		prices_1 << std::endl;
+	} // ending loop over paths
+	prices_end.close();
+	prices_1.close();
 	return 0;
 }
 
@@ -194,6 +176,7 @@ double Mean_and_discount(const double& Price_Sum, const int& Timesteps_left) {
 double Evaluate_Certificate_Price(const double& S_value, const int& Timesteps_left, bool TouchBarrier) {
 
 				double Z_sum = 0.0; //set them to zero before adding values for monte_carlo
+
 	      for (int path = 0; path < N_Paths_; path++){
 
 	        Z_sum += Evaluate_BonusDerivat_loop(S_value, Timesteps_left, TouchBarrier);
@@ -207,17 +190,19 @@ double Evaluate_Certificate_Price(const double& S_value, const int& Timesteps_le
 
 
 //Important that the bool is not a const reference here...as variable should be changed if underlying hits barrier
-//Propagate TS_per_eval timesteps until next evaluation
-double Propagate_S(const double& S_value, bool& TouchBarrier) {
+double Propagate_S_until_end(const double& S_value, bool& TouchBarrier, double& S_1) {
   double random_number;
 	double S_t;
   double S_t_old = S_value;
-  for (int inter_tm_step = 1; inter_tm_step <= TS_per_eval_; inter_tm_step++){
+
+  for (int tm_step = 1; tm_step <= N_Timesteps_; tm_step++){
     
 		random_number = Get_StdNormDistr_RandomNumber(); // Get the standard normal distributed random number
     //Taking into account that estimated mu_ comes from steady returns so that "mu_" - (Sigma^2)/2 = mu_ in this formula
 	  S_t = S_t_old * exp( mu_ * Timestep_size_ + Sigma_ * sqrt(Timestep_size_) * random_number );
     S_t_old = S_t;
+		//for daily VaR S_1 is not returned but changed as it is passed by reference...it can be used after calling the function
+		if (tm_step == 1) S_1 = S_t;
 	  //Check if barrier was touched
 		if(S_t <= Barrier_) TouchBarrier = true;
   }  
@@ -234,20 +219,9 @@ double Get_StdNormDistr_RandomNumber(){
 }
 
 
-template<std::size_t size>
-double Ar_Mean(const std::array<double, size>& Arr) {
-	double Mean = 0;
-	
-	for (auto& Val : Arr) {
-		Mean += Val;
-	}
-	Mean /= size;
-	return Mean;
-}
-
 //template to calculate the error...currently unused
 template<std::size_t size>
-double Std_Dev(const std::array<double, size>& Arr, const double& Mean) {
+double Stat_Error_Mean(const std::array<double, size>& Arr, const double& Mean) {
 	
 	double Var = 0;
   double Err;
@@ -258,7 +232,7 @@ double Std_Dev(const std::array<double, size>& Arr, const double& Mean) {
 
   Var /= (size - 1);
     
-  Err = sqrt(Var);
+  Err = sqrt(Var / size);
 	return Err;
 }
 
